@@ -1,0 +1,5 @@
+data
+*.old
+asift/
+**/__pycache__/
+**/.*.swp
