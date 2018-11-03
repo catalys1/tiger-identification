@@ -1,5 +1,5 @@
 import torch
-import utils
+import ssd
 
 
 class Block(torch.nn.Module):
@@ -51,7 +51,7 @@ class SSDNet(torch.nn.Module):
         filts = self.params['filters']
         ssd = self.params['ssd']
         
-        self.ssd = utils.SSD2d(**ssd)
+        self.ssd = ssd.SSD2d(**ssd)
         self.bn = torch.nn.BatchNorm2d(ssd['out_channels'])
         self.nonlin = getattr(torch.nn, self.params['nonlin'])(inplace=True)
         self.maxpool = torch.nn.MaxPool2d(2, 2)
@@ -123,7 +123,7 @@ class SimpleSSD(torch.nn.Module):
         super(SimpleSSD, self).__init__()
 
         token_size = kwargs.get('token_size', 19)
-        self.ssd = utils.SSD2d(1, 64, token_size)
+        self.ssd = ssd.SSD2d(1, 64, token_size)
         #self.bn = torch.nn.BatchNorm2d(64)
         self.nonlin = torch.nn.ReLU(inplace=True)
         self.mp1 = torch.nn.MaxPool2d(8, 4, padding=2)

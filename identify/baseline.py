@@ -8,53 +8,6 @@ import baseline_models as model
 import trainer as trn
 
 
-class ContrastLoss(torch.nn.Module):
-    '''Contrast loss.
-
-    This is the contrast loss of Hadsell, Chopra, and LeCun.
-    Koch, Zemel, and Salakhutdinov use a different loss function in the
-    Siamese network paper, which might be worth trying out.
-    '''
-
-    def __init__(self, m=1.0):
-        super(ContrastLoss, self).__init__()
-        self.m = m
-
-    def forward(self, x1, x2, y):
-        d = torch.sqrt(torch.pow(x1 - x2, 2).sum(1))
-        l = torch.mean(y * d**2 + torch.clamp(self.m - d, min=0.0)**2)
-        return l
-
-
-class SiameseTrainer(dnnutil.Trainer):
-
-    def train_batch(self, batch):
-        self.optim.zero_grad()
-        x1, x2, y = dnnutil.tocuda(batch)
-
-        #import pdb; pdb.set_trace()
-        pred = self.net(x1, x2)
-        loss = self.loss_fn(pred, y)
-
-        loss.backward()
-        self.optim.step()
-
-        loss = loss.item()
-
-        with torch.no_grad():
-            acc = self.measure_accuracy(pred, y)
-
-        return loss, acc
-
-    def test_batch(self, batch):
-        with torch.no_grad():
-            x1, x2, y = dnnutil.tocuda(batch)
-            pred = self.net(x1, x2)
-            loss = self.loss_fn(pred, y).item()
-            acc = self.measure_accuracy(pred, y)
-        return loss, acc
-
-
 def setup_data(args, num_workers=10):
     dset = dataset.TigerData(color='RGB')
     args = dict(
@@ -89,24 +42,23 @@ def main():
     net = setup_network(args)
     # Change optim, loss_fn, and accuracy as needed
     optim = torch.optim.Adam(net.parameters(), args.lr)
-    loss_fn = ContrastLoss(m=.5)
+    loss_fn = trn.ContrastLoss(m=.5)
 
     # trainer handles the details of training/eval, logger keeps a log of the
     # training, checkpointer handles saving model weights
-    trainer = trn.SiameseContrastTrainer(net, optim, loss_fn, None)
+    trainer = trn.SiameseContrastTrainer(net, optim, loss_fn)
 
     for e in range(args.start, args.start + args.epochs):
         start = time.time()
 
-        train_loss, train_acc = trainer.train(loaders[0], e)
-        train_d = trainer.get_mean_dist()
-        test_loss, test_acc = trainer.eval(loaders[1], e)
-        test_d = trainer.get_mean_dist()
+        trainer.plot_dist()
+        trainer.train(loaders[0], e)
+        trainer.eval(loaders[1], e)
+        stats = trainer.get_stats()
 
         t = time.time() - start
         lr = optim.param_groups[-1]['lr']
-        manager.epoch_save(net, e, t, lr, train_loss, train_d,
-                           test_loss, test_d)
+        manager.epoch_save(net, e, t, lr, *stats)
 
 
 if __name__ == '__main__':

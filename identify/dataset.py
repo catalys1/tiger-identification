@@ -155,6 +155,22 @@ class TigerData(object):
         ])
 
     def get_label(self, l1, l2=None):
+        '''Return the appropriate label for the current training task.
+
+        For classification, this returns a label an integer label in
+        [0, N-1], where N is the number of classes. For verification,
+        this returns a label in {0, 1}, where 1 indicates that the two
+        inputs are the same identity. For open-set, this returns the
+        same thing as for verification.
+
+        Args:
+            l1 (str): The label of the first input.
+            l2 (str): Optional, depending on the current training task.
+                The label of the second input.
+
+        Returns:
+            (int): A label. See description above.
+        '''
         if self.mode == 0:
             return self.class_ids[l1]
         elif self.mode == 1:
