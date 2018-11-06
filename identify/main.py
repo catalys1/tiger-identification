@@ -42,32 +42,16 @@ class AllPairContrastLoss(torch.nn.Module):
         return loss
 
 
-def get_data(batch_size=40, num_workers=4, **kwargs):
-    data = dataset.TigerData(**kwargs)
+def get_data(data, batch_size=40, num_workers=4):
     largs = dict(
         batch_size=batch_size,
         num_workers=num_workers,
-        shuffle=True,
         pin_memory=True,
     )
-    trl = torch.utils.data.DataLoader(data.train(), **largs)
+    trl = torch.utils.data.DataLoader(data.train(), shuffle=True, **largs)
     tel = torch.utils.data.DataLoader(data.test(), **largs)
 
     return trl, tel
-
-
-def setup_ssd_scratch(args):
-    loader = get_data(args.split, args.batch_size, num_workers=8, siamese=True)
-    kwargs = dict(
-        ssd=dict(in_channels=1, out_channels=64, kernel_size=19),
-    )
-    net = dnnutil.load_model(model.SSDNet, args.model, **kwargs)
-    optim = torch.optim.Adam(net.parameters(), lr=args.lr)
-    loss_fn = torch.nn.CosineEmbeddingLoss(margin=0.0)
-    trainer = SiameseTrainer(net, optim, loss_fn, None)
-
-    state = SimpleNamespace(net=net, loader=loader, optim=optim, trainer=trainer)
-    return state
 
 
 def setup_ssd(args):
@@ -101,25 +85,38 @@ def setup_ssd_simple(args):
     return state
 
 
+def setup(cfg, args):
+    data = cfg.data.data(**cfg.data.args)
+    loaders = get_data(data, args.batch_size, num_workers=8)
+
+    templates = torch.load(cfg.other['templates']).cuda()
+    net = dnnutil.load_model(cfg.model.model, args.model, **cfg.model.args)
+    net.set_ssd_kernels(templates)
+
+    optim = torch.optim.Adam(net.parameters(), lr=args.lr)
+    loss_fn = cfg.loss.loss(**cfg.loss.args)
+    trainer = cfg.trainer(net, optim, loss_fn)
+
+    state = SimpleNamespace(net=net, loaders=loaders, optim=optim, trainer=trainer)
+    return state
+
+
+
 def main():
-    methods = ['ssd', 'ssd_simple', 'ssd_scratch']
-    parser = dnnutil.basic_parser(batch_size=16, lr=1e-3)
-    parser.add_argument('method', choices=methods,
-        help='Type of model to train: {methods}')
+    parser = dnnutil.config_parser()
     args = parser.parse_args()
 
-    manager = dnnutil.Manager(root='../data/training/', run_num=args.rid)
-    manager.set_description(args.note)
-    manager.load_state(args, restore_lr=False)
+    manager = dnnutil.ConfigManager(root='../data/training/', run_num=args.rid)
+    cfg = manager.setup(args)
     
-    setup = globals()[f'setup_{args.method}']
-    state = setup(args)
+    state = setup(cfg, args)
 
     for e in range(args.start, args.start + args.epochs):
-        #import pdb; pdb.set_trace()
         t = time.time()
         state.trainer.train(state.loaders[0], e)
         state.trainer.eval(state.loaders[1], e)
+        state.trainer.plot_dist()
+
         t = time.time() - t
         stats = state.trainer.get_stats()
         lr = state.optim.param_groups[-1]['lr']

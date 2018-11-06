@@ -10,7 +10,9 @@ import json
 
 
 DATA = '../data/all_flanks_splits_600/'
-SPLIT_FILE = '../data-split.json'
+#SPLIT_FILE = '../data-split.json'
+SPLIT_FILE = '../data/split_at8.json'
+TEST_SPLIT = '../data/split_at8_test_pairs.json'
 
 
 def train_preprocess(size=320):

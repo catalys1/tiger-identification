@@ -15,13 +15,14 @@ class ContrastLoss(torch.nn.Module):
     def __init__(self, m=1.0):
         super(ContrastLoss, self).__init__()
         #self.m = m
-        self.m = m**2
+        self.m = m
 
     def forward(self, x1, x2, y):
-        d = torch.pow(x1 - x2, 2).sum(1)
+        #d = torch.pow(x1 - x2, 2).sum(1)
         #d = torch.sqrt(d2)
         #l = y * d**2 + (1 - y) * torch.clamp(self.m - d, min=0.0)**2
-        l = y * d + (1 - y) * torch.clamp(self.m - d, min=0.0)
+        d = torch.norm(x1 - x2, 2, dim=1)
+        l = y * d.pow(2) + (1 - y) * torch.clamp(self.m - d, min=0.0).pow(2)
         l = torch.mean(l)
         return l
 
