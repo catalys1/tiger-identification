@@ -10,9 +10,9 @@ import json
 
 
 DATA = '../data/all_flanks_splits_600/'
-#SPLIT_FILE = '../data-split.json'
 SPLIT_FILE = '../data/split_at8.json'
-TEST_SPLIT = '../data/split_at8_test_pairs.json'
+TEST_PAIRS = '../data/split_at8_test_pairs.json'
+FLANK_IDS = '../data/flank_to_id.json'
 
 
 def train_preprocess(size=320):
@@ -27,105 +27,110 @@ def test_preprocess(size=320):
     return T.Compose([
         T.Resize((size, size)),
     ])
-    
 
-class DataSubset(torch.utils.data.Dataset):
 
-    def __init__(self, master, data, preprocess):
+class _Dataset(torch.utils.data.Dataset):
+
+    def __init__(self, master, data, preproc):
         self.master = master
-        self.data = data
-        self.preprocess = preprocess
+        self.preproc = preproc
 
-        self.id2imgs = data.id2imgs
+        self.files = []
+        self.labels = []
+        for id, imgs in data:
+            self.files.extend(imgs)
+            self.labels.extend([id for _ in range(len(imgs))])
 
-        self.files = data.known_files
-        self.labels = data.known_labels
-        self.ids = data.known_ids
-        
     def __len__(self):
         return len(self.files)
 
-    def __getitem__(self, ind):
-        f = self.files[ind]
-        label = self.labels[ind]
+    def __getitem__(self, index):
+        raise NotImplementedError
+
+    def process(self, images):
         color = self.master.color
+        if type(images) == str:
+            images = (images,)
+        images = [
+            self.master.totensor(
+                self.preproc(
+                    Image.open(self.master.root / f).convert(color)
+                )
+            )
+            for f in images
+        ]
+        if len(images) == 1:
+            images = images[0]
+        return images
 
-        img = Image.open(self.master.root / f).convert(color)
-        img = self.preprocess(img)
-        img = self.master.totensor(img)
 
-        if self.master.siamese:
-            img2, label2 = self.sample_pair(f, label)
-            img2 = Image.open(self.master.root / img2).convert(color)
-            img2 = self.preprocess(img2)
-            img2 = self.master.totensor(img2)
+class SingleImageDataset(_Dataset):
 
-            return img, img2, self.master.get_label(label, label2)
+    def __init__(self, master, data, preproc):
+        super(SingleImageDataset, self).__init__(master, data, preproc)
+    
+    def __getitem__(self, index):
+        img = self.files[index]
+        label = self.master.get_class(self.labels[index])
+        return self.process(img), label
 
-        return img, self.master.get_label(label)
 
-    def sample_pair(self, img, label):
+class RandomPairDataset(_Dataset):
+
+    def __init__(self, master, data, preproc, fids):
+        super(RandomPairDataset, self).__init__(master, data.items(), preproc)
+        self.id2imgs = data
+        self.fids = fids
+
+    def __getitem__(self, index):
+        img = self.files[index]
+        label = self.labels[index]
+        img2, label2 = self._sample_pair(img, label)
+        imgs = self.process((img, img2))
+        lbl = label == label2
+        return imgs, lbl
+
+    def _sample_pair(self, img, label):
         same = random.random() > 0.5
         if same and len(self.id2imgs[label]) > 1:
             samples = random.sample(self.id2imgs[label], 2)
             other = samples[0] if samples[0] != img else samples[1]
             lbl = label
         else:
-            lbl = random.sample(self.ids, 2)
+            # sample an id with the same flank type (L or R) and then
+            # sample an image from it
+            flank = self.master.img_flanks[img]
+            lbl = random.sample(self.fids[flank], 2)
             lbl = lbl[0] if lbl[0] != label else lbl[1]
             other = random.choice(self.id2imgs[lbl])
-
         return other, lbl
 
-    def use_ids(self, ids):
-        if ids == 'known':
-            self.files = data.known_files
-            self.labels = data.known_labels
-            self.ids = data.known_ids
-        elif ids == 'unknown':
-            self.files = data.unknown_files
-            self.labels = data.unknown_labels
-            self.ids = data.unknown_ids
-        elif ids == 'both':
-            self.files = data.files
-            self.labels = data.labels
-            self.ids = data.ids
-        else:
-            raise KeyError('Unknown id "{}"'.format(ids))
 
+class FixedPairDataset(_Dataset):
 
-class DataSplit(object):
+    def __init__(self, master, data, preproc):
+        self.master = master
+        self.preproc = preproc
 
-    def __init__(self, data, known_key, unknown_key=None):
-        
         self.files = []
         self.labels = []
-        self.ids = []
-        self.id2imgs = data[known_key]
-        for key, vals in data[known_key].items():
-            self.files.extend(vals)
-            self.labels.extend([key for _ in range(len(vals))])
-            self.ids.append(key)
-        n = len(self.files)
-        k = len(self.ids)
-        self.known_files = self.files[:n]
-        self.known_labels = self.labels[:n]
-        self.known_ids = self.ids[:k]
+        keys = sorted(list(data.keys()), key=lambda x: 'positive' not in x)
+        self.n = sum(len(x) for k, x in data.items() if 'positive' in k)
+        for key in keys:
+            for id1, id2, label in data[key]:
+                self.files.append((id1, id2))
 
-        if unknown_key is not None:
-            self.id2imgs.update(data[unknown_key])
-            for key, vals in data[unknown_key].items():
-                self.files.extend(vals)
-                self.labels.extend([key for _ in range(len(vals))])
-                self.ids.append(key)
-            self.unknown_files = self.files[n:]
-            self.unknown_labels = self.labels[n:]
-            self.unknown_ids = self.ids[k:]
+    def __getitem__(self, index):
+        pair = self.files[index]
+        pair = self.process(pair)
+        label = index < self.n
+        return pair, label
 
 
 class TigerData(object):
 
-    def __init__(self, root=DATA, mode='verification', size=320, color='L'):
+    def __init__(self, root=DATA, split=SPLIT_FILE, test_pairs=TEST_PAIRS,
+                 mode='verification', size=320, color='L'):
         '''Args:
             root (str): Directory where the images are stored.
             mode (str): Training scheme. One of "classification",
@@ -134,62 +139,73 @@ class TigerData(object):
             color (str): Color of the returned images. One of "RGB" or
                 "L" (grayscale). Default: "L".
         '''
-        modes = dict(classification=0, verification=1, openset=2)
         self.root = Path(root)
+        modes = dict(classification=0, verification=1, openset=2)
+        assert mode in modes
         self.mode = modes[mode]
-        self.siamese = (mode != 'classification')
         self.color = color
 
-        data = json.load(open(SPLIT_FILE))
+        self.data = json.load(open(split))
+        if test_pairs is not None:
+            self.test_pairs = json.load(open(test_pairs))
+        else:
+            self.test_pairs = None
 
-        self.train_data = DataSplit(data, 'train_known')
-        self.test_data = DataSplit(data, 'test_known', 'test_unknown')
-        self.val_data = DataSplit(data, 'val_known', 'val_unknown')
+        self.class_ids = {x: i for i, x in enumerate(chain(*self.data['known_IDs'].values()))}
+        self.n_known = sum(len(x) for x in self.data['known_IDs'].values())
+        self.n_unknwon = sum(len(x) for x in self.data['unknown_IDs'].values())
 
-        self.class_ids = {x: i for i, x in enumerate(data['known_IDs'])}
+        self.img_flanks = self.data['img_to_side_map']
 
         T = torchvision.transforms
-        self.train_proc = train_preprocess(size)
-        self.test_proc = test_preprocess(size)
+        self.trproc = train_preprocess(size)
+        self.teproc = test_preprocess(size)
         self.totensor = T.Compose([
             T.ToTensor(),
             T.Normalize([.5, .5, .5], [.5, .5, .5])
         ])
 
-    def get_label(self, l1, l2=None):
-        '''Return the appropriate label for the current training task.
-
-        For classification, this returns a label an integer label in
-        [0, N-1], where N is the number of classes. For verification,
-        this returns a label in {0, 1}, where 1 indicates that the two
-        inputs are the same identity. For open-set, this returns the
-        same thing as for verification.
-
-        Args:
-            l1 (str): The label of the first input.
-            l2 (str): Optional, depending on the current training task.
-                The label of the second input.
-
-        Returns:
-            (int): A label. See description above.
-        '''
-        if self.mode == 0:
-            return self.class_ids[l1]
-        elif self.mode == 1:
-            assert l2 is not None
-            return l1 == l2
-        elif self.mode == 2:
-            assert l2 is not None
-            return l1 == l2
+    def get_class(self, id):
+        c = self.class_ids.get(id, self.n_known)
+        return c
 
     def train(self):
-        return DataSubset(self, self.train_data, self.train_proc)
+        data = self.data['train_known']
+        if self.mode == 0:
+            return SingleImageDataset(self, data.items(), self.trproc)
+        elif self.mode == 1:
+            fids = self.data['known_IDs']
+            return RandomPairDataset(self, data, self.trproc, fids)
+        elif self.mode == 2:
+            fids = self.data['known_IDs']
+            return RandomPairDataset(self, data, self.trproc, fids)
 
     def test(self):
-        return DataSubset(self, self.test_data, self.test_proc)
+        if self.mode == 0:
+            data = self.data['test_known'].items()
+            return SingleImageDataset(self, data, self.trproc)
+        elif self.mode == 1:
+            data = self.test_pairs
+            return FixedPairDataset(self, data, self.trproc)
+        elif self.mode == 2:
+            data = chain(self.data['test_known'].items(),
+                         self.data['test_unknown'].items())
+            return SingleImageDataset(self, data, self.trproc)
 
     def val(self):
-        return DataSubset(self, self.val_data, self.test_proc)
+        pass
+
+    def _make_val_pairs(self):
+        k = self.data['val_known']
+        u = self.data['val_unknown']
+
+        pos_pairs = []
+        for id, imgs in chain(k.items(), u.items()):
+            if len(imgs) < 2: continue
+            for i in range(len(imgs) - 1):
+                for j in range(i + 1, len(imgs)):
+                    pos_pairs.append(imgs[i], imgs[j])
+        neg_pairs = []
 
 
 class SimpleData(torch.utils.data.Dataset):
