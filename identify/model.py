@@ -133,6 +133,10 @@ class SimpleSSD(torch.nn.Module):
         self.conv3 = torch.nn.Conv2d(32, 8, 1)
         self.lin = torch.nn.Conv2d(20**2 * 8, 256, 1)
 
+        if 'templates' in kwargs:
+            templates = torch.load(kwargs['templates'])
+            self.set_ssd_kernels(templates)
+
     def set_ssd_kernels(self, kernels):
         self.ssd.set_weight(kernels)
 
