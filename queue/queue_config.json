@@ -1,0 +1,19 @@
+{
+  "universal":
+  {
+    "beanstalk_host":"fawkes",
+    "beanstalk_port":52700,
+    "shared_locations":['/mnt/acornwp/multiview/']
+  },
+  "machine_specific":
+  {
+    "fawkes":{},
+    "blackhawk":{},
+    "velociraptor":{},
+    "peregrine":
+      {
+        "beanstalk_host" : "localhost"
+      },
+    "CAMPEPHILUS" : { }
+  }
+}
