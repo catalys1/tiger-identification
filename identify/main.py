@@ -70,9 +70,9 @@ def setup(cfg, args):
     return state
 
 
-def main():
+def main(commands=None, callback=None):
     parser = dnnutil.config_parser(run_dir='../data/training/')
-    args = parser.parse_args()
+    args = parser.parse_args(args=commands)
 
     manager = dnnutil.ConfigManager(root=args.run_dir, run_num=args.rid)
     cfg = manager.setup(args)
@@ -88,6 +88,19 @@ def main():
         stats = state.trainer.get_stats()
         lr = state.optim.param_groups[-1]['lr']
         manager.epoch_save(state.net, e, t, lr, *stats)
+
+        if callback is not None:
+            data = dict(
+                epoch=e,
+                n_epochs=args.start + args.epochs,
+                time=t,
+                lr=lr,
+                train_loss=stats[0],
+                train_acc=stats[1],
+                test_loss=stats[2],
+                test_acc=stats[3],
+            )
+            callback(data)
 
 
 if __name__ == '__main__':
