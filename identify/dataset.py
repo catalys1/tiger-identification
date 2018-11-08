@@ -29,6 +29,14 @@ def test_preprocess(size=320):
     ])
 
 
+def _wrap_index(func):
+    def wrap_index(self, index):
+        n = len(self.files)
+        i = index % n
+        return func(self, i)
+    return wrap_index
+
+
 class _Dataset(torch.utils.data.Dataset):
 
     def __init__(self, master, data, preproc):
@@ -41,8 +49,10 @@ class _Dataset(torch.utils.data.Dataset):
             self.files.extend(imgs)
             self.labels.extend([id for _ in range(len(imgs))])
 
+        self.n = len(self.files) * self.master.train_size
+
     def __len__(self):
-        return len(self.files)
+        return self.n
 
     def __getitem__(self, index):
         raise NotImplementedError
@@ -69,6 +79,7 @@ class SingleImageDataset(_Dataset):
     def __init__(self, master, data, preproc):
         super(SingleImageDataset, self).__init__(master, data, preproc)
     
+    @_wrap_index
     def __getitem__(self, index):
         img = self.files[index]
         label = self.master.get_class(self.labels[index])
@@ -82,13 +93,14 @@ class RandomPairDataset(_Dataset):
         self.id2imgs = data
         self.fids = fids
 
+    @_wrap_index
     def __getitem__(self, index):
         img = self.files[index]
         label = self.labels[index]
         img2, label2 = self._sample_pair(img, label)
         imgs = self.process((img, img2))
-        lbl = label == label2
-        return imgs, lbl
+        lbl = (label == label2)
+        return imgs[0], imgs[1], lbl
 
     def _sample_pair(self, img, label):
         same = random.random() > 0.5
@@ -120,17 +132,20 @@ class FixedPairDataset(_Dataset):
             for id1, id2, label in data[key]:
                 self.files.append((id1, id2))
 
+    def __len__(self):
+        return len(self.files)
+
     def __getitem__(self, index):
         pair = self.files[index]
         pair = self.process(pair)
         label = index < self.n
-        return pair, label
+        return pair[0], pair[1], label
 
 
 class TigerData(object):
 
     def __init__(self, root=DATA, split=SPLIT_FILE, test_pairs=TEST_PAIRS,
-                 mode='verification', size=320, color='L'):
+                 mode='verification', size=320, color='L', train_size=1):
         '''Args:
             root (str): Directory where the images are stored.
             mode (str): Training scheme. One of "classification",
@@ -144,6 +159,7 @@ class TigerData(object):
         assert mode in modes
         self.mode = modes[mode]
         self.color = color
+        self.train_size = train_size
 
         self.data = json.load(open(split))
         if test_pairs is not None:
