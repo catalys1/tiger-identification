@@ -3,6 +3,35 @@ import torchvision
 import dnnutil
 
 
+class Resnet18(torch.nn.Module):
+    def __init__(self, n_class, pretrained=True):
+        super(Resnet18, self).__init__()
+        
+        self.net = torchvision.models.resnet18(pretrained=pretrained)
+        n = self.net.fc.in_features
+        self.net.avgpool = torch.nn.AdaptiveAvgPool2d(1)
+        self.net.fc = torch.nn.Linear(n, n_class)
+
+    def embed(self, x):
+        x = self.net.conv1(x)
+        x = self.net.bn1(x)
+        x = self.net.relu(x)
+        x = self.net.maxpool(x)
+
+        x = self.net.layer1(x)
+        x = self.net.layer2(x)
+        x = self.net.layer3(x)
+        x = self.net.layer4(x)
+
+        x = self.net.avgpool(x)
+        x = x.view(x.size(0), -1)
+
+        return x
+
+    def forward(self, x):
+        return self.net(x)
+
+
 class ModifiedResnet18(torch.nn.Module):
 
     def __init__(self):
