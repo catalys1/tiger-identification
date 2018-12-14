@@ -1,5 +1,6 @@
 import torch
 import torchvision
+import numpy as np
 from pathlib import Path
 from PIL import Image
 from collections import defaultdict
@@ -9,17 +10,24 @@ import random
 import json
 
 
-DATA = '../data/all_flanks_splits_600/'
-SPLIT_FILE = '../data/split_at8.json'
-TEST_PAIRS = '../data/split_at8_test_pairs.json'
-FLANK_IDS = '../data/flank_to_id.json'
+DATA = '/multiview/datasets/Panthera_tigris/all_flanks_splits_600/'
+SPLIT_FILE = '/multiview/datasets/Panthera_tigris/split_at8.json'
+TEST_PAIRS = '/multiview/datasets/Panthera_tigris/split_at8_test_pairs.json'
+FLANK_IDS = '/multiview/datasets/Panthera_tigris/flank_to_id.json'
 
 
-def train_preprocess(size=320):
+def train_preprocess(size=320, augment=False):
     T = torchvision.transforms
-    return T.Compose([
-        T.Resize((size, size)),
-    ])
+    if augment:
+        ops = [
+            T.RandomResizedCrop((size, size), (0.9, 1.0), (5 / 6, 6 / 5)),
+            T.ColorJitter(0.05, 0.05, 0.05),
+        ]
+    else:
+        ops = [
+            T.Resize((size, size)),
+        ]
+    return T.Compose(ops)
     
 
 def test_preprocess(size=320):
@@ -145,7 +153,8 @@ class FixedPairDataset(_Dataset):
 class TigerData(object):
 
     def __init__(self, root=DATA, split=SPLIT_FILE, test_pairs=TEST_PAIRS,
-                 mode='verification', size=320, color='L', train_size=1):
+                 mode='verification', size=320, color='L', train_size=1,
+                 augment=False):
         '''Args:
             root (str): Directory where the images are stored.
             mode (str): Training scheme. One of "classification",
@@ -174,7 +183,7 @@ class TigerData(object):
         self.img_flanks = self.data['img_to_side_map']
 
         T = torchvision.transforms
-        self.trproc = train_preprocess(size)
+        self.trproc = train_preprocess(size, augment)
         self.teproc = test_preprocess(size)
         self.totensor = T.Compose([
             T.ToTensor(),
@@ -279,4 +288,168 @@ class SimpleData(torch.utils.data.Dataset):
         img2 = self.totensor(img2)
 
         return img1, img2, int(label) * 2 - 1
+
+
+class PatchDataset(torch.utils.data.Dataset):
+
+    def __init__(self, master, data):
+        super(PatchDataset, self).__init__()
+        self.master = master
+        self.files = [x for y in data for x in data[y]]
+        if self.master.n_imgs is not None:
+            self.files = self.files[:self.master.n_imgs]
+
+    def __len__(self):
+        return len(self.files) * self.master.points_per_image
+
+    def _sample_patch(self, img, k, ww, hh):
+        while True:
+            ul = [np.random.randint(0, ww), np.random.randint(0, hh)]
+            lr = [ul[0] + 2 * k, ul[1] + 2 * k]
+            crop = img.crop(ul + lr)
+            crop_arr = np.array(crop)[k//2:k//2+k, k//2:k//2+k].ravel()
+            # if the patch is uniform intensity, we ignore it and sample a
+            # new patch
+            if crop_arr.std() > 0:
+                return crop, crop_arr
+
+    def __getitem__(self, ind):
+        f = self.master.root / self.files[ind // self.master.points_per_image]
+        img = Image.open(f).convert(self.master.color)
+        s = self.master.size
+        if self.master.aspect == 'preserve':
+            w, h = img.size
+            f = s / max(w, h)
+            size = (int(w * f), int(h * f))
+        else:
+            size = (s, s)
+        img = img.resize(size, Image.BILINEAR)
+
+        # sample small-affine perturbed patches around the sample point
+        k = self.master.k
+        ww = img.size[0] - 2 * k
+        hh = img.size[1] - 2 * k
+        crop, crop_arr = self._sample_patch(img, k, ww, hh)
+        pos_samples = self.master.pos_samples
+        pos = [self.master.perturb(crop) for i in range(pos_samples)]
+
+        # find mean and stddev of positive sample distances
+        q = np.stack(pos).reshape(len(pos), -1)
+        q = np.square(q - crop_arr).sum(1)
+        q = q[q > 0]
+        mu = q.mean()
+        std = q.std()
+
+        # sample negative example patches away from the sample point
+        # reject a negative sample if its distance from the sample point
+        # is too similar to the positive samples
+        neg_samples = self.master.neg_samples
+        neg = []
+        for i in range(neg_samples):
+            ul = [np.random.randint(0, ww), np.random.randint(0, hh)]
+            lr = [ul[0] + 2 * k, ul[1] + 2 * k]
+            nc = img.crop(ul + lr)
+
+            nca = np.array(nc)[k//2:k//2+k, k//2:k//2+k].ravel()
+            if np.linalg.norm(crop_arr - nca, 2)**2 > mu + 2 * std:
+                neg.append(nc)
+        neg = [
+            self.master.perturb(neg[i % len(neg)]) for i in range(neg_samples)]
+
+        patches = torch.stack([self.master.normalize(x) for x in pos + neg], 0)
+        # label is 1 for positive patches and 0 for negative patches
+        labels = torch.LongTensor([
+            1 for i in range(len(pos))] + [0 for i in range(len(neg))])
+        return patches, labels
+
+
+class TigerPatchData(object):
+
+    def __init__(self, root=DATA, split=SPLIT_FILE, n_imgs=None, size=320,
+                 points_per_image=100, aspect='preserve', color='L',
+                 normalize='mean', pos_samples=10, neg_samples=10, k=15):
+        '''
+        '''
+        self.root = Path(root)
+        self.n_imgs = n_imgs
+        self.points_per_image = points_per_image
+        self.size = size
+        self.aspect = aspect
+        self.color = color
+        self.pos_samples = pos_samples
+        self.neg_samples = neg_samples
+        self.k = k
+
+        self.data = json.load(open(split))
+
+        T = torchvision.transforms
+        self.perturb = T.Compose([
+            T.RandomAffine(10, (0.15, 0.15), (0.9, 1.1),
+                           resample=Image.BICUBIC),
+            T.CenterCrop(k),
+            T.ColorJitter(0.25, 0.5),
+        ])
+        self.normalize = T.Compose([
+            T.ToTensor(),
+            Normalize(self.normalize),
+        ])
+
+    def train(self):
+        return PatchDataset(self, self.data['train_known'])
+
+    def test(self):
+        return PatchDataset(self, self.data['test_known'])
+
+
+class Normalize(object):
+    def __init__(self, mode='mean'):
+        self.mode = mode
+
+    def __call__(self, x):
+        if self.mode == 'scale':
+            return self._scale(x)
+        elif self.mode == 'mean':
+            return self._mean(x)
+        elif self.mode == 'minmax':
+            return self._minmax(x)
+        elif self.mode == 'whiten':
+            return self._whiten(x)
+
+    def _scale(self, x):
+        '''Shift the data to the range [-1, 1] without changing its
+        relative center and scale'''
+        return x * 2 - 1
+
+    def _mean(self, x):
+        '''Mean-center the data, without doing any scaling'''
+        xx = x.view(x.shape[0], -1)
+        ds = [1] * (len(x.shape) - 1)
+        mean = xx.mean(1).view(x.shape[0], *ds)
+
+        return x - mean
+
+    def _minmax(self, x):
+        '''Scale data so that the min value is -1 and the max value is 1'''
+        xx = x.view(x.shape[0], -1)
+        ds = [1] * (len(x.shape) - 1)
+        min = xx.min(1).view(x.shape[0], *ds)
+        max = xx.max(1).view(x.shape[0], *ds)
+
+        return (x - min) / (max - min) * 2 - 1
+
+    def _whiten(self, x):
+        '''Whiten data so it has 0 mean and unit standard deviation'''
+        xx = x.view(x.shape[0], -1)
+        ds = [1] * (len(x.shape) - 1)
+        mean = xx.mean(1).view(x.shape[0], *ds)
+        std = xx.std(1).view(x.shape[0], *ds)
+
+        return (x - mean) / std
+
+
+def collate(samples):
+    c = []
+    for i in range(len(samples[0])):
+        c.append(torch.cat([s[i] for s in samples], 0))
+    return c
 

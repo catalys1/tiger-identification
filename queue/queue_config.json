@@ -1,9 +1,9 @@
 {
   "universal":
   {
-    "beanstalk_host":"fawkes",
+    "beanstalk_host":"velociraptor",
     "beanstalk_port":52700,
-    "shared_locations":['/mnt/acornwp/multiview/']
+    "shared_locations":["/mnt/acornwp/multiview/"]
   },
   "machine_specific":
   {

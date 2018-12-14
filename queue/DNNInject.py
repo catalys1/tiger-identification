@@ -27,6 +27,7 @@ if __name__ == '__main__':
     parser.add_argument('--jobpath', type=str, default='.' )
     parser.add_argument('--rundir', type=str, required=True )
     parser.add_argument('--config', type=str, default='queue_config.json')
+    parser.add_argument('--rid', type=int, default=0)
     args = parser.parse_args()
 
     #job_desc_file='random_filename'
@@ -50,7 +51,11 @@ if __name__ == '__main__':
     bs_conn.use('jobs_incoming')
 
     jobpath = os.path.abspath(args.jobpath)
-    msg = {'job_desc_file':job_desc_file,'job_path':jobpath,'rundir':args.rundir,'start':True,'other_params':[]}
+    msg = {'job_desc_file':job_desc_file,
+           'job_path':os.path.realpath(jobpath),
+           'rundir':os.path.realpath(args.rundir),
+           'runid':args.rid,
+           'other_params':[]}
     #msg = {'command':f'main.py -D {args.rundir} start 
 
     bs_conn.put(json.dumps(msg))

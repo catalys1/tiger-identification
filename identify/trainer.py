@@ -27,6 +27,92 @@ class ContrastLoss(torch.nn.Module):
         return l
 
 
+class AllPairPatchContrastLoss(torch.nn.Module):
+
+    def __init__(self, npos, nneg, m=1.0):
+        super(AllPairPatchContrastLoss, self).__init__()
+        self.m = m
+        self.n = npos + nneg
+    
+    #def forward(self, x, labels):
+        #pairwise_dist_sq = torch.mm(x, x.t())
+        #squared_norm = pairwise_dist_sq.diag()
+        #pairwise_dist_sq = (
+        #    squared_norm.view(1, -1) + 
+        #    squared_norm.view(-1, 1) - 
+        #    2 * pairwise_dist_sq)
+        #pairwise_dist_sq.clamp_(min=0.0)
+        #del squared_norm
+
+        #pos_labels = (labels == 1)
+        #same_label = pos_labels.view(-1, 1).add(other=pos_labels).eq(2)
+        #pairs_same = pairwise_dist_sq[same_label]
+        #del pos_labels, same_label
+
+        #diff_label = labels.view(-1, 1).eq(1 - labels)
+        #pairs_diff = pairwise_dist_sq[diff_label]
+        #pairs_diff = pairs_diff[pairs_diff.nonzero()]
+
+        #loss_pos = pairs_same.mean()
+        #loss_neg = torch.clamp(self.m - pairs_diff.sqrt(), min=0).pow(2).mean()
+        #loss = loss_pos + loss_neg
+        #return loss
+
+    #def forward(self, x, labels):
+        #inner_prod = torch.mm(x, x.t())
+        #squared_norm = inner_prod.diag()
+        #tri = torch.triu(torch.ones(*inner_prod.shape), 1) == 1
+        #inner_prod = inner_prod[tri]
+        #pairwise_dist_sq = (
+        #    (squared_norm.view(1, -1) + squared_norm.view(-1, 1))[tri] - 
+        #    2 * inner_prod)
+        #pairwise_dist_sq.clamp_(min=0.0)
+        #del squared_norm, inner_prod
+
+        #lab = labels.view(-1, 1).add(other=labels)[tri]
+        #pos_match = lab.eq(2)  # both labels are 1
+        #pairs_same = pairwise_dist_sq[pos_match]
+        #del pos_match
+
+        #diff_label = lab.eq(1)  # one label is 1, the other is 0
+        #pairs_diff = pairwise_dist_sq[diff_label] + 1e-5
+        ##pairs_diff = pairs_diff[pairs_diff.nonzero()]
+
+        #loss_pos = pairs_same.mean()
+        #loss_neg = torch.clamp(self.m - pairs_diff.sqrt(), min=0).pow(2).mean()
+        #loss = loss_pos + loss_neg
+        #return loss
+
+    def forward(self, x, labels):
+        # we only want to look at pairs of samples that are associated with
+        # the same point, so we need to pull out the batch dimension
+        b = x.shape[0] // self.n
+        x = x.view(b, self.n, -1)
+        inner_prod = x.matmul(x.transpose(-1, -2))
+        squared_norm = inner_prod.diagonal(dim1=-2, dim2=-1)
+        tri = torch.triu(torch.ones(*inner_prod.shape[-2:]), 1) == 1
+        inner_prod = inner_prod[:, tri]
+        pairwise_dist_sq = (
+            (squared_norm.view(b, 1, -1) +
+            squared_norm.view(b, -1, 1))[:, tri] -
+            2 * inner_prod)
+        pairwise_dist_sq.clamp_(min=0.0)
+        del squared_norm, inner_prod
+
+        lab = labels.view(b, -1, 1).add(other=labels.view(b, 1, -1))[:, tri]
+        pos_match = lab.eq(2)  # both labels are 1
+        pairs_same = pairwise_dist_sq[pos_match]
+        del pos_match
+
+        diff_label = lab.eq(1)  # one label is 1, the other is 0
+        pairs_diff = pairwise_dist_sq[diff_label] + 1e-5
+
+        loss_pos = pairs_same.mean()
+        loss_neg = torch.clamp(self.m - pairs_diff.sqrt(), min=0).pow(2).mean()
+        loss = loss_pos + loss_neg
+        return loss
+
+
 def threshold_accuracy(dist, y, t):
     y = y.byte()
     thresh = torch.le(dist, t)
@@ -139,15 +225,18 @@ class SiameseContrastTrainer(dnnutil.Trainer):
         plt.pause(0.001)
 
 
-class SiameseClassTrainer(dnnutil.Trainer):
+class PatchTrainer(dnnutil.Trainer):
+
+    def __init__(self, net, optim, loss_fn):
+        super(PatchTrainer, self).__init__(net, optim, loss_fn, lambda *x: 0)
 
     def train_batch(self, batch):
         self.optim.zero_grad()
-        x1, x2, y = dnnutil.tocuda(batch)
-
         #import pdb; pdb.set_trace()
-        pred = self.net(x1, x2)
-        loss = self.loss_fn(pred, y)
+        x, y = dnnutil.tocuda(batch)
+
+        emb = self.net(x)
+        loss = self.loss_fn(emb, y)
 
         loss.backward()
         self.optim.step()
@@ -155,15 +244,15 @@ class SiameseClassTrainer(dnnutil.Trainer):
         loss = loss.item()
 
         with torch.no_grad():
-            acc = self.measure_accuracy(pred, y)
+            acc = self.measure_accuracy(emb, y)
 
         return loss, acc
 
+    @torch.no_grad()
     def test_batch(self, batch):
-        with torch.no_grad():
-            x1, x2, y = dnnutil.tocuda(batch)
-            pred = self.net(x1, x2)
-            loss = self.loss_fn(pred, y).item()
-            acc = self.measure_accuracy(pred, y)
+        x, y = dnnutil.tocuda(batch)
+        emb = self.net(x)
+        loss = self.loss_fn(emb, y).item()
+        acc = self.measure_accuracy(emb, y)
         return loss, acc
 

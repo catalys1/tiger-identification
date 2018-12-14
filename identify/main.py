@@ -13,32 +13,19 @@ from types import SimpleNamespace
 DATA = Path('../data/')
 
 
-def get_data(data, batch_size=40, num_workers=4):
-    largs = dict(
+def get_loaders(data, batch_size=16, num_workers=8, collate=None):
+    args = dict(
         batch_size=batch_size,
         num_workers=num_workers,
         pin_memory=True,
     )
-    trl = torch.utils.data.DataLoader(data.train(), shuffle=True, **largs)
-    tel = torch.utils.data.DataLoader(data.test(), **largs)
+    if collate is not None:
+        args['collate_fn'] = collate
+
+    trl = torch.utils.data.DataLoader(data.train(), shuffle=True, **args)
+    tel = torch.utils.data.DataLoader(data.test(), **args)
 
     return trl, tel
-
-
-def setup_ssd(args):
-    loaders = get_data(args.batch_size, num_workers=8)
-    kwargs = dict(
-        ssd=dict(in_channels=1, out_channels=64, kernel_size=19),
-    )
-    net = dnnutil.load_model(model.SSDNet, args.model, **kwargs)
-    net.set_ssd_kernels(torch.load('templates').cuda())
-    #net.ssd.weight.requires_grad = False
-    optim = torch.optim.Adam(net.parameters(), lr=args.lr)
-    loss_fn = ContrastLoss(m=0.5)
-    trainer = trn.SiameseContrastTrainer(net, optim, loss_fn)
-
-    state = SimpleNamespace(net=net, loaders=loaders, optim=optim, trainer=trainer)
-    return state
 
 
 def setup_ssd_simple(args):
@@ -57,8 +44,14 @@ def setup_ssd_simple(args):
 
 
 def setup(cfg, args):
+    if 'collate' in cfg.other:
+        collate = getattr(dataset, cfg.other['collate']['func'])
+    else:
+        collate = None
     data = cfg.data.data(**cfg.data.args)
-    loaders = get_data(data, args.batch_size, num_workers=8)
+    workers = cfg.hp.get('num_workers', 8)
+    loaders = get_loaders(data, args.batch_size, num_workers=workers,
+                          collate=collate)
 
     net = dnnutil.load_model(cfg.model.model, args.model, **cfg.model.args)
 
@@ -95,10 +88,10 @@ def main(commands=None, callback=None):
                 n_epochs=args.start + args.epochs,
                 time=t,
                 lr=lr,
-                train_loss=stats[0],
-                train_acc=stats[1],
-                test_loss=stats[2],
-                test_acc=stats[3],
+                train_loss=float(stats[0]),
+                train_acc=float(stats[1]),
+                test_loss=float(stats[2]),
+                test_acc=float(stats[3]),
             )
             callback(data)
 

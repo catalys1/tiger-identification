@@ -38,12 +38,12 @@ class DNNManager():
         targ = self.config['beanstalk_host']
         port = self.config['beanstalk_port']
         if not targ == host:
-            print(f'ERROR!!!  {config_file} indicates that manager should be run on {targ.upper()} not {host.upper()}')
+            print(f'\rERROR!!!  {config_file} indicates that manager should be run on {targ.upper()} not {host.upper()}')
             sys.exit(-1)
         else:
             # FORK the beanstalk daemon, if not already running
             if self.__is_port_in_use__(port):
-                print(f'ERROR!!!  It appears that port {port} is already in use!!!')
+                print(f'\rERROR!!!  It appears that port {port} is already in use!!!')
                 sys.exit(-1)
             else:
                 ps = subprocess.Popen(['beanstalkd','-V','-p',f'{port}'])
@@ -79,7 +79,7 @@ class DNNManager():
         print( 'DNNManager running...' )
 
         while self.running:
-            print('Checking for incoming jobs...')
+            print('\rChecking for incoming jobs...'.ljust(40, ' '), end='')
             #self.bs_conn.watch('jobs_completed')
             self.bs_conn.watch('jobs_incoming')
             self.bs_conn.use('jobs_todo')
@@ -96,16 +96,16 @@ class DNNManager():
                 jpath = injob['job_path']
                 joined = os.path.join(jpath,jfile)
                 if not self.is_valid_path( jpath ):
-                    print(f'    ERROR:  Path {jpath} is not shared or doesn\'t exist!!')
+                    print(f'\r    ERROR:  Path {jpath} is not shared or doesn\'t exist!!')
                     self.job_id -= 1 # redo this number
                 elif not os.path.exists( joined ):
-                    print(f'    ERROR:  File {joined} doesn\'t exist!!')
+                    print(f'\r    ERROR:  File {joined} doesn\'t exist!!')
                     self.job_id -= 1 # redo this number
                 else:
-                    print(f'    Posting Job {jid}...', end='')
+                    print(f'\r    Posting Job {jid}...', end='')
                     self.bs_conn.put( json.dumps(injob) )
                 msg.delete()
-                print(f'done!')
+                print(f'\rdone!'.ljust(40, ' '))
 
                 # see if others!
                 msg = self.bs_conn.reserve(1)
@@ -113,14 +113,14 @@ class DNNManager():
 
 
 
-            print('Checking for completed jobs...')
+            print('\rChecking for completed jobs...'.ljust(40, ' '), end='')
             self.bs_conn.watch('jobs_completed')
 
             msg = self.bs_conn.reserve(1)
             while msg:
                 jid = json.loads(msg.body)['job_id']
                 who = json.loads(msg.body)['completed_by']
-                print(f'    Found completed job {jid} (completed by {who})')
+                print(f'\r    Found completed job {jid} (completed by {who})')
 
                 msg.delete()
                 msg = self.bs_conn.reserve(1)

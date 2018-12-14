@@ -17,6 +17,8 @@ import subprocess
 
 import beanstalkc as BSC
 
+import sys
+sys.path.append('../identify')
 import main
 
 
@@ -33,10 +35,10 @@ class DNNWorker:
 
         ngpu = count_gpus()
         if not (gpu_num >= 0 and gpu_num < ngpu):
-            print(f'ERROR!!! Only found {ngpu} GPUs [0..{ngpu-1}], cannot assign GPU {gpu_num}')
+            print(f'\rERROR!!! Only found {ngpu} GPUs [0..{ngpu-1}], cannot assign GPU {gpu_num}')
             sys.exit(-1)
         else:
-            os.environ['CUDA_VISIBLE_DEVICES'] = '{gpu_num}'
+            os.environ['CUDA_VISIBLE_DEVICES'] = f'{gpu_num}'
             self.gpu_info = (hostname,gpu_num,ngpu)
             self.my_id    = f'{hostname}-gpu{gpu_num}'
 
@@ -68,7 +70,7 @@ class DNNWorker:
     def __workerLoop(self):
 
 
-        print(f'Worker ID={self.my_id} Running...')
+        print(f'\rWorker ID={self.my_id} Running...')
         #flickrLink = FlickrLink.FlickrLink(CONFIG)
 
         self.bs_conn.watch('jobs_todo')
@@ -78,7 +80,7 @@ class DNNWorker:
 
         while processingQueries:
 
-            print(f'{self.my_id}: trying to get another message')
+            print(f'\r{self.my_id}: waiting for another message', end='')
             msg = self.bs_conn.reserve(1)
 
             if msg:
@@ -100,45 +102,45 @@ class DNNWorker:
                 self.current_jid = job_id
 
                 job_file = jbody['job_desc_file']
-                print(f'    Loading job info from file:  {job_file}')
+                print(f'\r    Loading job info from file:  {job_file}')
 
                 # TODO SHOULD CHECK HERE IF VALID JOB FILE
-                jfile = injob['job_desc_file']
-                jpath = injob['job_path']
+                jfile = jbody['job_desc_file']
+                jpath = jbody['job_path']
                 joined = os.path.join(jpath,jfile)
-                rundir  = injob['rundir']
-                start_and_config = f'start {joined}' if injob['start'] else 'continue'
+                rundir  = jbody['rundir']
+                runid = jbody['runid']
+                if runid == 0:
+                    start = f'start {joined}'
+                else:
+                    start = f'continue --rid={runid}'
                 # TODO NEED TO HANDLE RESUME WITH SPECIFIC RUN ID
 
-                command_string = f'main.py -D {rundir} {start_and_config}'
+                #command_string = f'main.py -D {rundir} {start_and_config}'
+                command_string = f'-D {rundir} {start}'.split()
 
 
-                print(f'    Running job {job_id}...')
+                print(f'\r    Running job {job_id}...')
                 # TODO Do ACTUAL Processing here
                 #time.sleep(5)
 
                 main.main( commands=command_string,
-                           callback=lambda response: self.__jobProgressCallback(response) )
-
-
-                print(f'job {job_id} completed...\n\n')
-
-
-
-
+                       callback=(lambda response: self.__jobProgressCallback(response)) )
+                print(f'\rjob {job_id} completed...\n\n')
+                #print(f'\rERROR: call to main failed with the following exception\n{e}')
 
 
                 # RESPONSE
                 response = {'job_id':job_id,'completed_by':self.my_id}
-                print(f'{self.my_id}: trying to send completion message... ', end="")
+                print(f'\r{self.my_id}: trying to send completion message... ', end="")
                 self.bs_conn.put(json.dumps(response))
-                print('done')
+                print('\rdone')
                 #self.sendLock.release()
 
                 self.current_jid = None
 
             else:
-                print(f'{self.my_id}: Sleeping... ')
+                #print(f'\r{self.my_id}: Sleeping... ' + ' '*10, end='')
                 time.sleep(1)
 
 
