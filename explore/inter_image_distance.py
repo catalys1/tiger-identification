@@ -4,6 +4,7 @@ import PIL.Image as Image
 import numpy as np
 import matplotlib.pyplot as plt
 import argparse
+import json
 from pathlib import Path
 import dnnutil
 import patch_distance as pd
@@ -35,14 +36,14 @@ def extract_patch(img, point, k=11, net=None):
     x, y = point
     patch = img[y:y + k, x:x + k]
     if net is not None:
-        patch = torch.from_numpy(patch).view(1, 1, k, k) / 0.5 - 1.0
+        patch = torch.from_numpy(patch).view(1, 1, k, k)
         if torch.cuda.is_available():
             patch = patch.cuda()
         patch = net(patch).squeeze()
     return patch
 
 
-def calculate_distance(img, patch, net, k=11, whiten=False, transform=True):
+def calculate_distance(img, patch, net, k=11, transform=True, normalize=None):
     img = torch.from_numpy(img).view(1, 1, *img.shape)
     if not transform:
         patch = torch.from_numpy(patch).contiguous()
@@ -55,18 +56,14 @@ def calculate_distance(img, patch, net, k=11, whiten=False, transform=True):
         b, s, l = ps.shape
         ps = ps.permute(0, 2, 1)
         ps = ps.view(-1, 1, k, k) / 0.5 - 1.0
-        ps = td.transform(net, ps)
+        ps = td.transform(net, ps, normalize=normalize)
         ps = ps.view(b, l, -1)
         ps = ps.permute(0, 2, 1)
         ps = ps.view(-1, img.shape[-2] - k + 1, img.shape[-1] - k + 1)
+        if normalize:
+            patch = normalize(patch)
     else:
         ps = ps.view(k**2, img.shape[-2] - k + 1, img.shape[-1] - k + 1)
-        if whiten:
-            kd = {'keepdim': True}
-            patch = (patch - patch.mean(**kd)) / patch.var(**kd)
-            mu = ps.mean(0, **kd)
-            sig = ps.var(0, **kd)
-            ps = (ps - mu) / sig
 
     dist = torch.pow(ps - patch.view(-1, 1, 1), 2).sum(0)
     return dist
@@ -99,28 +96,28 @@ def show_closest(img, dist, k, n=300, tol=0.75, ax=None):
         ax.vlines([x, x + k], [y, y], [y + k, y + k], colors=cm(ii))
         ax.hlines([y, y + k], [x, x], [x + k, x + k], colors=cm(ii))
         ax.text(x + 1, y + 1, str(ii), fontsize=8, color='k',
-                 verticalalignment='top')
-    ax.set_xlim(0, img.shape[1] - 1)
+                verticalalignment='top')
+        ax.set_xlim(0, img.shape[1] - 1)
     ax.set_ylim(img.shape[0] - 1, 0)
 
 
 def main():
     parser = argparse.ArgumentParser('Visualize patch distances')
     parser.add_argument('-i', '--img', type=str, default='0', nargs='+',
-        help='Images. If an integer, uses it as an index into a list of image'
-             'files. If a filename, uses the image in that file. If the string '
-             '"rand", chooses a random image from the list of image files.')
+            help='Images. If an integer, uses it as an index into a list of image'
+            'files. If a filename, uses the image in that file. If the string '
+            '"rand", chooses a random image from the list of image files.')
     parser.add_argument('-p', '--point', type=int, nargs=2, default=(-1, -1),
-        help='(x, y) point to use as top right corner of reference patch. If '
-             '(-1, -1), then choose a random point.')
-    parser.add_argument('-k', '--patch-size', type=int, default=11,
-        help='Size of a patch (square).')
+            help='(x, y) point to use as top right corner of reference patch. If '
+            '(-1, -1), then choose a random point.')
+    parser.add_argument('-k', '--patch-size', type=int, default=15,
+            help='Size of a patch (square).')
     parser.add_argument('-s', '--size', type=int, default=320,
-        help='Size of the longer side of the image after resize')
+            help='Size of the longer side of the image after resize')
     parser.add_argument('-w', '--whiten', action='store_true',
-        help='Whiten each patch individually before calculating distances.')
-    parser.add_argument('--checkpoint', type=str, default='',
-        help='Path to model checkpoint file.')
+            help='Whiten each patch individually before calculating distances.')
+    parser.add_argument('--run', type=Path, default='',
+        help='Path to run directory to use for saved model.')
 
     args = parser.parse_args()
 
@@ -128,7 +125,6 @@ def main():
 
     whiten = args.whiten
     imgs = []
-    #import pdb; pdb.set_trace()
     # Get all the files
     for i in args.img:
         img_file = get_image_file(i, dset)
@@ -138,17 +134,20 @@ def main():
     img = imgs[0]
     point = pd.get_point(args.point, k, *img.shape)
 
-    if not args.checkpoint:
+    if not args.run:
         run = sorted(list(Path('runs').iterdir()))[-1]
-        args.checkpoint = str(run / 'model_weights')
-    net = td.get_model(model.PyrNet, args.checkpoint)
+        args.run = run
+    cfg = json.load(open(str(args.run / 'config.json')))
+    normalizer = dataset.Normalize(cfg['dataset']['kwargs']['normalize'])
+    net = td.get_model(model.PyrNet, str(args.run / 'model_weights'))
 
     print('Calculate patch distance')
     dist = pd.calculate_distance(img, point, k, whiten)
     patch_dists = [dist]
     patch = extract_patch(img, point, k)
     for i in imgs[1:]:
-        dist = calculate_distance(i, patch, net, k, whiten, transform=False)
+        dist = calculate_distance(i, patch, net, k, transform=False,
+                                  normalize=normalizer)
         patch_dists.append(dist)
 
     print('Calculate transformed distance')
@@ -156,7 +155,8 @@ def main():
     trans_dists = [dist]
     patch = extract_patch(img, point, k, net)
     for i in imgs[1:]:
-        dist = calculate_distance(i, patch, net, k, transform=True)
+        dist = calculate_distance(i, patch, net, k, transform=True,
+                                  normalize=normalizer)
         trans_dists.append(dist)
 
     print('Show closest patches')

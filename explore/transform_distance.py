@@ -3,6 +3,7 @@ import PIL.Image as Image
 import numpy as np
 import matplotlib.pyplot as plt
 import argparse
+import json
 from pathlib import Path
 import dnnutil
 from patch_distance import calculate_distance as patch_distance
@@ -10,6 +11,7 @@ from patch_distance import calculate_distance as patch_distance
 import sys
 sys.path.append('../identify/')
 import model
+import dataset
 
 
 DATA = '/multiview/datasets/Panthera_tigris/all_flanks_splits_600'
@@ -52,10 +54,13 @@ def get_model(model_class, checkpoint, args=[]):
 
 
 @torch.no_grad()
-def transform(net, patches, batch_size=5000):
+def transform(net, patches, batch_size=5000, normalize=None):
     output = torch.empty(patches.shape[0], 64)
     for i in range(0, patches.shape[0], batch_size):
         b = patches[i:i + batch_size]
+        if normalize:
+            b = normalize(b)
+        b = b.contiguous()
         out = net(b)
         output[i:i + out.shape[0]] = out
     if torch.cuda.is_available():
@@ -63,7 +68,7 @@ def transform(net, patches, batch_size=5000):
     return output
 
 
-def calculate_distance(img, point, net, k=11, whiten=False):
+def calculate_distance(img, point, net, k=11, normalize=None):
     img = torch.from_numpy(img).view(1, 1, *img.shape)
     if torch.cuda.is_available():
         img = img.cuda()
@@ -76,11 +81,6 @@ def calculate_distance(img, point, net, k=11, whiten=False):
     ps = ps.view(b, l, -1)
     ps = ps.permute(0, 2, 1)
     ps = ps.view(-1, img.shape[-2] - k + 1, img.shape[-1] - k + 1)
-
-    #if whiten:
-    #    mu = ps.mean(0, keepdim=True)
-    #    sig = ps.std(0, keepdim=True)
-    #    ps = (ps - mu) / sig
 
     x, y = point
     dist = torch.pow(ps - ps[:, y, x].view(-1, 1, 1), 2).sum(0)
@@ -128,14 +128,14 @@ def main():
     parser.add_argument('-p', '--point', type=int, nargs=2, default=(-1, -1),
         help='(x, y) point to use as top right corner of reference patch. If '
              '(-1, -1), then choose a random point.')
-    parser.add_argument('-k', '--patch-size', type=int, default=11,
+    parser.add_argument('-k', '--patch-size', type=int, default=15,
         help='Size of a patch (square).')
     parser.add_argument('-s', '--size', type=int, default=320,
         help='Size of the longer side of the image after resize')
     parser.add_argument('-w', '--whiten', action='store_true',
         help='Whiten each patch individually before calculating distances.')
-    parser.add_argument('--checkpoint', type=str, default='',
-        help='Path to model checkpoint file.')
+    parser.add_argument('--run', type=Path, default='',
+        help='Path to run directory to use for saved model.')
 
     args = parser.parse_args()
 
@@ -148,12 +148,14 @@ def main():
     print('Calculate patch distance')
     reg_dist = patch_distance(img, point, k, whiten)
 
-    if not args.checkpoint:
+    if not args.run:
         run = sorted(list(Path('runs').iterdir()))[-1]
-        args.checkpoint = str(run / 'model_weights')
-    net = get_model(model.PyrNet, args.checkpoint)
+        args.run = run
+    cfg = json.load(open(str(args.run / 'config.json')))
+    normalizer = dataset.Normalize(cfg['dataset']['kwargs']['normalize'])
+    net = get_model(model.PyrNet, str(args.run / 'model_weights'))
     print('Calculate transformed distance')
-    dist = calculate_distance(img, point, net, k, whiten)
+    dist = calculate_distance(img, point, net, k, normalizer)
     print('Show closest patches')
     fig, ax = plt.subplots(1, 2, figsize=(24, 12))
     show_closest(img, reg_dist, k, ax=ax[0])

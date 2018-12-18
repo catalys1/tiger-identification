@@ -391,7 +391,7 @@ class TigerPatchData(object):
         ])
         self.normalize = T.Compose([
             T.ToTensor(),
-            Normalize(self.normalize),
+            Normalize(normalize),
         ])
 
     def train(self):
@@ -402,6 +402,7 @@ class TigerPatchData(object):
 
 
 class Normalize(object):
+    '''Normalizes an image tensor using one of several different methods.'''
     def __init__(self, mode='mean'):
         self.mode = mode
 
@@ -422,29 +423,24 @@ class Normalize(object):
 
     def _mean(self, x):
         '''Mean-center the data, without doing any scaling'''
-        xx = x.view(x.shape[0], -1)
-        ds = [1] * (len(x.shape) - 1)
-        mean = xx.mean(1).view(x.shape[0], *ds)
-
-        return x - mean
+        m = x.mean(-1, keepdim=True).mean(-2, keepdim=True)
+        return x - m
 
     def _minmax(self, x):
         '''Scale data so that the min value is -1 and the max value is 1'''
-        xx = x.view(x.shape[0], -1)
-        ds = [1] * (len(x.shape) - 1)
-        min = xx.min(1).view(x.shape[0], *ds)
-        max = xx.max(1).view(x.shape[0], *ds)
+        min = x.min(-1, keepdim=True)[0].min(-2, keepdim=True)[0]
+        max = x.max(-1, keepdim=True)[0].max(-2, keepdim=True)[0]
+        scale = max - min
+        scale[scale == 0] = 1
 
-        return (x - min) / (max - min) * 2 - 1
+        return (x - min) / scale * 2 - 1
 
     def _whiten(self, x):
         '''Whiten data so it has 0 mean and unit standard deviation'''
-        xx = x.view(x.shape[0], -1)
-        ds = [1] * (len(x.shape) - 1)
-        mean = xx.mean(1).view(x.shape[0], *ds)
-        std = xx.std(1).view(x.shape[0], *ds)
-
-        return (x - mean) / std
+        m = x.mean(-1, keepdim=True).mean(-2, keepdim=True)
+        std = x.std(-1, keepdim=True).std(-2, keepdim=True)
+        std[std == 0] = 1
+        return (x - m) / std
 
 
 def collate(samples):

@@ -69,8 +69,9 @@ def main(commands=None, callback=None):
 
     manager = dnnutil.ConfigManager(root=args.run_dir, run_num=args.rid)
     cfg = manager.setup(args)
-    
     state = setup(cfg, args)
+
+    print(f'Run {str(manager.run_dir)}')
 
     for e in range(args.start, args.start + args.epochs):
         t = time.time()

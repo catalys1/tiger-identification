@@ -93,7 +93,7 @@ def main():
     parser.add_argument('-p', '--point', type=int, nargs=2, default=(-1, -1),
         help='(x, y) point to use as top right corner of reference patch. If '
              '(-1, -1), then choose a random point.')
-    parser.add_argument('-k', '--patch-size', type=int, default=11,
+    parser.add_argument('-k', '--patch-size', type=int, default=15,
         help='Size of a patch (square).')
     parser.add_argument('-s', '--size', type=int, default=320,
         help='Size of the longer side of the image after resize')
