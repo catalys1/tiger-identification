@@ -123,8 +123,9 @@ def cluster_patches(patches, k=100, dim_reduce=None, normalize=False):
         dim_reduce (int): (optional) if given, describes the number of
             principle components of the patches to keep when doing PCA.
             If None, PCA will not be performed.
-        normalize (bool): if True, patches will be individually whitened
-            (zero mean, unit variance) before clustering.
+        normalize (bool): if True, patches will be individually normalized
+            before clustering. Patches are normalized so their min and max
+            values are scaled to 0 and 1.
 
     Returns:
         templates: the cluster centers
@@ -152,23 +153,6 @@ def cluster_patches(patches, k=100, dim_reduce=None, normalize=False):
     return templates, labels
 
 
-def cluster_transformed(patches, tpatches, k=100):
-    patches = patches.reshape(patches.shape[0], -1)
-
-    kmeans = MiniBatchKMeans(k, init_size=2000, verbose=False)
-    labels = kmeans.fit_predict(tpatches)
-    index = np.argsort(labels)
-    uni = np.unique(labels[index], return_index=True)[1].tolist() + [None]
-    templates = []
-    for i in range(1, len(uni)):
-        l, h = uni[i-1:i+1]
-        p = patches[index[l:h]]
-        templates.append(p.mean(0))
-    templates = np.stack(templates, 0)
-
-    return templates, labels
-
-
 def get_data_subset():
     '''Extract a subset of the training set images to use for sampling
     patches.
@@ -190,55 +174,28 @@ def get_data_subset():
     return subset
 
 
-@torch.no_grad()
-def transform_patches(patches, net, normalize=None):
-    import torch
-
-    batch_size = 5000
-    patches = torch.from_numpy(patches).unsqueeze_(1).float()
-    if torch.cuda.is_available():
-        patches = patches.cuda()
-    output = np.empty((patches.shape[0], 64))
-    for i in tqdm.trange(0, patches.shape[0], batch_size):
-        b = patches[i:i + batch_size]
-        if normalize:
-            b = normalize(b)
-        b = b.contiguous()
-        out = net(b)
-        output[i:i + out.shape[0]] = out.cpu().numpy()
-    return output
-
-
 def find_templates(args):
     # Get the images that we will extract patches from
     subset = get_data_subset()
 
     # Sample patches
-    templates = []
+    patches = []
     for f in tqdm.tqdm(subset):
         img = imread(f'../data/{f}', 'L', size=320)
         contours = get_contours(img)
-        patches = sample_patches(img, contours, args.n, args.patch_size)
-        templates.append(patches)
-    templates = np.concatenate(templates, 0)
+        batch = sample_patches(img, contours, args.n, args.patch_size)
+        patches.append(batch)
+    patches = np.concatenate(patches, 0)
 
-    if args.transform:
-        from dnnutil import load_model
-        cfg = json.load(open(args.transform + '/config.json'))
-        normalize = dataset.Normalize(cfg['dataset']['kwargs']['normalize'])
-        net = load_model(model.PyrNet, args.transform + '/model_weights')
-        tpatch = transform_patches(templates, net, normalize)
-        centers, labels = cluster_transformed(templates, tpatch, k=args.k)
-    else:
-        print('Clustering...')
-        dim_reduce = 50 if not args.transform else None
-        normalize = args.norm if not args.transform else False
-        centers, labels = cluster_patches(templates, k=args.k,
-                                          dim_reduce=dim_reduce,
-                                          normalize=normalize)
+    print('Clustering...')
+    dim_reduce = 50  # Number of principle components to keep
+    normalize = args.norm  # Whether to normalize patches prior to clustering
+    centers, labels = cluster_patches(patches, k=args.k,
+                                      dim_reduce=dim_reduce,
+                                      normalize=normalize)
 
     if args.save_clusters:
-        np.savez('clusters.npz', patches=templates, labels=labels)
+        np.savez('clusters.npz', patches=patches, labels=labels)
 
     return centers
 
