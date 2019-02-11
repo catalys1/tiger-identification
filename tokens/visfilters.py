@@ -4,7 +4,7 @@ import argparse
 import numpy as np
 from matplotlib import pyplot as plt
 sys.path.append('../identify')
-import utils, dataset
+import dataset
 
 
 def make_img(img):
@@ -37,7 +37,7 @@ def main():
     parser.add_argument('--toks', default='tokens-norm.npy')
     parser.add_argument('--rand', action='store_true')
     parser.add_argument('-s', type=int, default=0)
-    parser.add_argument('-n', type=int, default=65)
+    parser.add_argument('-n', type=int, default=64)
     args = parser.parse_args()
 
     toks = np.load(args.toks)
