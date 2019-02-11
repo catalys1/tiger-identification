@@ -49,6 +49,27 @@ def imread(file, color='L', size=None):
     return img
 
 
+def get_data_subset():
+    '''Extract a subset of the training set images to use for sampling
+    patches.
+    '''
+    data = dataset.TigerData(mode='classification').train()
+    files = data.files
+    identities = data.labels
+
+    from collections import Counter
+    subset = []
+    count = Counter()
+    tup = [0, 1]
+    for i in range(len(files)):
+        if count.get(identities[i], 0) < 2:
+            tup[0] = identities[i]
+            count.update(tup)
+            subset.append(files[i])
+
+    return subset
+
+
 def get_contours(img):
     '''Calculate the image contours using Canny edge detection.
     Automatically adjusts the Canny parameters so that the ratio of edge
@@ -99,10 +120,14 @@ def sample_patches(img, contours, n=300, ksize=25):
     p = ksize // 2
     h, w = img.shape[:2]
     
+    # get the location of all contour points that are far enough away from
+    # the edge of the image that we can center a patch on them
     points = np.stack(contours.nonzero(), 1).T
     points = points[:, (points[0] >= p) & (points[0] < h - p) &
                     (points[1] >= p) & (points[1] < w - p)]
     points = points.T
+    # randomly sample n contour points and extract their corresponding
+    # patches
     sample_ind = np.random.choice(points.shape[0], size=n, replace=False)
     patches = []
     for i in sample_ind:
@@ -114,7 +139,7 @@ def sample_patches(img, contours, n=300, ksize=25):
     return patches
 
 
-def cluster_patches(patches, k=100, dim_reduce=None, normalize=False):
+def cluster_patches(patches, k=100, dim_reduce=None):
     '''Cluster patches using mini-batch k-means.
 
     Args:
@@ -123,9 +148,6 @@ def cluster_patches(patches, k=100, dim_reduce=None, normalize=False):
         dim_reduce (int): (optional) if given, describes the number of
             principle components of the patches to keep when doing PCA.
             If None, PCA will not be performed.
-        normalize (bool): if True, patches will be individually normalized
-            before clustering. Patches are normalized so their min and max
-            values are scaled to 0 and 1.
 
     Returns:
         templates: the cluster centers
@@ -133,48 +155,23 @@ def cluster_patches(patches, k=100, dim_reduce=None, normalize=False):
     '''
     patches = patches.reshape(patches.shape[0], -1)
 
-    if normalize:
-        nrm = patches - patches.min(axis=1, keepdims=True)
-        nrm = nrm / nrm.max(axis=1, keepdims=True)
-        patches = nrm
-
     if dim_reduce is not None and dim_reduce < patches.shape[1]:
         reduction = PCA(dim_reduce)
         patches = reduction.fit_transform(patches)
 
     kmeans = MiniBatchKMeans(k, init_size=2000, verbose=False)
     labels = kmeans.fit_predict(patches)
-    templates = kmeans.cluster_centers_
 
-    if dim_reduce is not None and dim_reduce < patches.shape[1]:
-        templates = reduction.inverse_transform(templates)
-        templates = templates.clip(0, 1)
+    #if dim_reduce is not None and dim_reduce < patches.shape[1]:
+    #    templates = reduction.inverse_transform(templates)
+    #    templates = templates.clip(0, 1)
 
-    return templates, labels
-
-
-def get_data_subset():
-    '''Extract a subset of the training set images to use for sampling
-    patches.
-    '''
-    data = dataset.TigerData(mode='classification').train()
-    files = data.files
-    identities = data.labels
-
-    from collections import Counter
-    subset = []
-    count = Counter()
-    tup = [0, 1]
-    for i in range(len(files)):
-        if count.get(identities[i], 0) < 2:
-            tup[0] = identities[i]
-            count.update(tup)
-            subset.append(files[i])
-
-    return subset
+    return labels
 
 
 def find_templates(args):
+    '''Returns a set of patches with their corresponding cluster labels.
+    '''
     # Get the images that we will extract patches from
     subset = get_data_subset()
 
@@ -187,17 +184,21 @@ def find_templates(args):
         patches.append(batch)
     patches = np.concatenate(patches, 0)
 
+    # Normalize patches (scale min/max to 0/1)
+    # Is this really the best way to normalize? I'm not sure...
+    if args.norm:
+        nrm = patches - patches.min(axis=1, keepdims=True)
+        nrm = nrm / nrm.max(axis=1, keepdims=True)
+        patches = nrm
+
     print('Clustering...')
     dim_reduce = 50  # Number of principle components to keep
     normalize = args.norm  # Whether to normalize patches prior to clustering
-    centers, labels = cluster_patches(patches, k=args.k,
-                                      dim_reduce=dim_reduce,
-                                      normalize=normalize)
+    labels = cluster_patches(patches, k=args.k,
+                             dim_reduce=dim_reduce,
+                             normalize=normalize)
 
-    if args.save_clusters:
-        np.savez('clusters.npz', patches=patches, labels=labels)
-
-    return centers
+    return patches, labels
 
 
 if __name__ == '__main__':
@@ -220,13 +221,8 @@ if __name__ == '__main__':
     parser.add_argument('--norm', action='store_true',
         help='Normalize patches before clustering, so that they have the same '
              'brightness range')
-    parser.add_argument('--save-clusters', action='store_true',
-        help='Save out all the patches and their cluster indexes')
     args = parser.parse_args()
 
-    templates = find_templates(args)
-    np.save(args.file, templates)
-
-
-
+    patches, labels = find_templates(args)
+    np.savez_compressed(args.file, patches=patches, labels=labels})
 
