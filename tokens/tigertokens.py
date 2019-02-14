@@ -154,49 +154,54 @@ def cluster_patches(patches, k=100, dim_reduce=None):
         labels: the cluster labels
     '''
     patches = patches.reshape(patches.shape[0], -1)
+    r = dim_reduce is not None and dim_reduce < patches.shape[1]
 
-    if dim_reduce is not None and dim_reduce < patches.shape[1]:
+    if r:
         reduction = PCA(dim_reduce)
         patches = reduction.fit_transform(patches)
 
     kmeans = MiniBatchKMeans(k, init_size=2000, verbose=False)
     labels = kmeans.fit_predict(patches)
 
-    #if dim_reduce is not None and dim_reduce < patches.shape[1]:
-    #    templates = reduction.inverse_transform(templates)
-    #    templates = templates.clip(0, 1)
+    if r:
+        patches = reduction.inverse_transform(patches)
+        patches = patches.clip(0, 1)
 
-    return labels
+    return patches, labels
 
 
-def find_templates(args):
+def find_patch_distributions(args):
     '''Returns a set of patches with their corresponding cluster labels.
     '''
+    ps = args.patch_size
     # Get the images that we will extract patches from
     subset = get_data_subset()
 
     # Sample patches
     patches = []
-    for f in tqdm.tqdm(subset):
+    for f in tqdm.tqdm(subset, desc='Sampling patches'):
         img = imread(f'../data/{f}', 'L', size=320)
         contours = get_contours(img)
-        batch = sample_patches(img, contours, args.n, args.patch_size)
+        batch = sample_patches(img, contours, args.n, ps)
         patches.append(batch)
     patches = np.concatenate(patches, 0)
+    patches = patches.reshape(patches.shape[0], -1)
 
     # Normalize patches (scale min/max to 0/1)
     # Is this really the best way to normalize? I'm not sure...
     if args.norm:
         nrm = patches - patches.min(axis=1, keepdims=True)
-        nrm = nrm / nrm.max(axis=1, keepdims=True)
+        mx = nrm.max(axis=1, keepdims=True)
+        mx[mx == 0] = 1  # watch out for uniform patches
+        nrm = nrm / mx
         patches = nrm
 
+    breakpoint()
     print('Clustering...')
     dim_reduce = 50  # Number of principle components to keep
     normalize = args.norm  # Whether to normalize patches prior to clustering
-    labels = cluster_patches(patches, k=args.k,
-                             dim_reduce=dim_reduce,
-                             normalize=normalize)
+    patches, labels = cluster_patches(patches, k=args.k, dim_reduce=dim_reduce)
+    patches = patches.reshape(patches.shape[0], ps, ps)
 
     return patches, labels
 
@@ -214,15 +219,11 @@ if __name__ == '__main__':
         help='Number of patches to sample from each image. Default: 300')
     parser.add_argument('--patch-size', type=int, default=15,
         help='Size of token patches. Default: 15')
-    parser.add_argument('--transform', type=str, default='',
-        help='If specified, gives the run directory containing a saved model '
-             'that will be used to transform the patches before they are '
-             'clustered. Default: ""')
     parser.add_argument('--norm', action='store_true',
         help='Normalize patches before clustering, so that they have the same '
              'brightness range')
     args = parser.parse_args()
 
-    patches, labels = find_templates(args)
-    np.savez_compressed(args.file, patches=patches, labels=labels})
+    patches, labels = find_patch_distributions(args)
+    np.savez_compressed(args.file, patches=patches, labels=labels)
 
