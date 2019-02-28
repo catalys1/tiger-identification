@@ -1,3 +1,85 @@
+'''Provides classes that give access to the tiger data in a way that is
+(hopefully) modular and easy to use.
+
+Data format:
+    The classes in this module assume that the tiger images are located
+    in a single flat folder.
+
+    The data may be used in several different types of tasks, such as
+    classification, verification (siamese contrast), or open set
+    verification (allowing for identities not encountered during
+    training). To facilitate this, the data is split as follows:
+    
+    Tiger Identities:
+        Known:
+            Train
+            Val
+            Test
+        Unknown:
+            Val
+            Test
+
+    Each individual tiger identity is assigned to one of two groups:
+    "known" or "unknown". The distinction is that "known" identities are
+    seen during training, while "unknown" are not. Within the set of
+    known identities, images for each identity are split into "train",
+    "val", and "test". "Train" images are used to train network parameters
+    and "test" images are used to evaluate performance. "Val" images are
+    not used to train the network, but are used to learn distance
+    thresholds in open set problems. Within the "unknown" set of
+    identities, images are split between "test" and "val", which serve
+    the same purpose as described in the "known" set.
+
+    A json files provide the needed meta data. It has the following form:
+      {
+      "train_known": [img_id, ...],
+       "test_known": [img_id, ...],
+       "val_known": [img_id, ...],
+       "test_unknown": [img_id, ...],
+       "val_unknown": [img_id, ...],
+       "known_IDs": [tiger_id, ...],
+       "unknown_IDs": [tiger_id, ...],
+       "img_to_side_map": {img_id: flank_type, ...}
+       }
+    
+    There is also a json file containing a fixed set of test image pairs
+    for consistent evaluation in pair-based learning problems.
+
+
+Classes:
+    TigerData:
+        Container for keeping track of all the metadata. This class should
+        be the one that gets explicitely instantiated - the dataset classes
+        are created by calls to .train() or .val().
+
+    SingleImageDataset:
+        Dataset that returns (image, label) pairs, as used in general image
+        classification.
+
+    RandomPairDataset:
+        Dataset that returns dynmically generated random pairs of images.
+        This is used for training siamese/contrastive networks.
+
+    FixedPairDataset:
+        Dataset that returns pairs of images, where the pairs are fixed
+        ahead of time. This is used for consistent evaluation of constrastive
+        networks.
+
+
+Examples:
+    >>> import dataset
+    >>> tigerdata = dataset.TigerData(mode="classification")
+    >>> train_data = tigerdata.train()
+    >>> test_data = tigerdata.test()
+    >>> train_data, test_data
+    <dataset.SingleImageDataset>, <dataset.SingleImageDataset>
+    
+    >>> tigerdata = dataset.TigerData(mode="verification")
+    >>> train_data = tigerdata.train()
+    >>> test_data = tigerdata.test()
+    >>> train_data, test_data
+    <dataset.RandomPairDataset>, <dataset.FixedPairDataset>
+'''
 import torch
 import torchvision
 import numpy as np
@@ -17,6 +99,8 @@ FLANK_IDS = '/multiview/datasets/Panthera_tigris/flank_to_id.json'
 
 
 def train_preprocess(size=320, augment=False):
+    '''Preprocess training images. If using augmentations, performs a random
+    resized crop and color jitter'''
     T = torchvision.transforms
     if augment:
         ops = [
@@ -31,6 +115,7 @@ def train_preprocess(size=320, augment=False):
     
 
 def test_preprocess(size=320):
+    '''Preprocess test images'''
     T = torchvision.transforms
     return T.Compose([
         T.Resize((size, size)),
@@ -38,6 +123,8 @@ def test_preprocess(size=320):
 
 
 def _wrap_index(func):
+    '''A funtion wrapper for wrapping an index (modding it by the total
+    number of elements)'''
     def wrap_index(self, index):
         n = len(self.files)
         i = index % n
@@ -46,7 +133,15 @@ def _wrap_index(func):
 
 
 class _Dataset(torch.utils.data.Dataset):
+    '''Base class for different types of datasets.
 
+    Args:
+        master (TigerData): a reference to the TigerData object containing
+            the data.
+        data (dict): a subset of the data contained in master.
+        preproc (callable): a method for preprocessing the data, such as
+            those exposed by torchvision.transforms.
+    '''
     def __init__(self, master, data, preproc):
         self.master = master
         self.preproc = preproc
@@ -83,7 +178,16 @@ class _Dataset(torch.utils.data.Dataset):
 
 
 class SingleImageDataset(_Dataset):
+    '''A standard classification type dataset, where single images are
+    returned, along with their class labels.
 
+    Args:
+        master (TigerData): a reference to the TigerData object containing
+            the data.
+        data (dict): a subset of the data contained in master.
+        preproc (callable): a method for preprocessing the data, such as
+            those exposed by torchvision.transforms.
+    '''
     def __init__(self, master, data, preproc):
         super(SingleImageDataset, self).__init__(master, data, preproc)
     
@@ -95,7 +199,18 @@ class SingleImageDataset(_Dataset):
 
 
 class RandomPairDataset(_Dataset):
+    '''A dataset consisting of image pairs that are dynamically sampled.
+    Half the time the images in the sampled pair will have the same
+    identity, half the time they will have different identities.
 
+    Args:
+        master (TigerData): a reference to the TigerData object containing
+            the data.
+        data (dict): a subset of the data contained in master.
+        preproc (callable): a method for preprocessing the data, such as
+            those exposed by torchvision.transforms.
+        fids (dict): a mapping from flanks (L or R) to tiger identities.
+    '''
     def __init__(self, master, data, preproc, fids):
         super(RandomPairDataset, self).__init__(master, data.items(), preproc)
         self.id2imgs = data
@@ -127,7 +242,15 @@ class RandomPairDataset(_Dataset):
 
 
 class FixedPairDataset(_Dataset):
+    '''A dataset consisting of a set of fixed image pairs.
 
+    Args:
+        master (TigerData): a reference to the TigerData object containing
+            the data.
+        data (dict): a subset of the data contained in master.
+        preproc (callable): a method for preprocessing the data, such as
+            those exposed by torchvision.transforms.
+    '''
     def __init__(self, master, data, preproc):
         self.master = master
         self.preproc = preproc
@@ -151,18 +274,31 @@ class FixedPairDataset(_Dataset):
 
 
 class TigerData(object):
-
+    '''Container for tiger data and common functionality that is not
+    dataset specific. By dataset, we mean the different ways the data is
+    loaded and used, determined by the task (such as classification, or
+    siamese pairs, etc).
+    
+    Args:
+        root (str): directory where the images are stored.
+        split (str): path to file containing the data splits for test
+            and train.
+        test_pairs (str): path to files containing pairs of image names
+            to be used as a fixed set of testing pairs. May be None if
+            training classification.
+        mode (str): training scheme. One of "classification",
+            "verification", or "openset". Default: "verification".
+        size (int): size of the returned images. Default: 320.
+        color (str): color of the returned images. One of "RGB" or
+            "L" (grayscale). Default: "L".
+        train_size (float): percentage of the data to use during training.
+            Default: 1.0.
+        augmentation (bool): whether to apply data augmentation during
+            training. Default: False.
+    '''
     def __init__(self, root=DATA, split=SPLIT_FILE, test_pairs=TEST_PAIRS,
-                 mode='verification', size=320, color='L', train_size=1,
+                 mode='verification', size=320, color='L', train_size=1.0,
                  augment=False):
-        '''Args:
-            root (str): Directory where the images are stored.
-            mode (str): Training scheme. One of "classification",
-                "verification", or "openset". Default: "verification".
-            size (int): Size of the returned images. Default: 320.
-            color (str): Color of the returned images. One of "RGB" or
-                "L" (grayscale). Default: "L".
-        '''
         self.root = Path(root)
         modes = dict(classification=0, verification=1, openset=2)
         assert mode in modes
@@ -177,9 +313,11 @@ class TigerData(object):
             self.test_pairs = None
 
         self.class_ids = {x: i for i, x in enumerate(chain(*self.data['known_IDs'].values()))}
+        # number of known and unknown identities
         self.n_known = sum(len(x) for x in self.data['known_IDs'].values())
         self.n_unknwon = sum(len(x) for x in self.data['unknown_IDs'].values())
 
+        # mapping between images and which flank is visible
         self.img_flanks = self.data['img_to_side_map']
 
         T = torchvision.transforms
@@ -191,10 +329,12 @@ class TigerData(object):
         ])
 
     def get_class(self, id):
+        '''Return the class number for a given tiger id'''
         c = self.class_ids.get(id, self.n_known)
         return c
 
     def train(self):
+        '''Return a _Dataset subclass depending on the desired problem'''
         data = self.data['train_known']
         if self.mode == 0:
             return SingleImageDataset(self, data.items(), self.trproc)
@@ -206,6 +346,7 @@ class TigerData(object):
             return RandomPairDataset(self, data, self.trproc, fids)
 
     def test(self):
+        '''Return a _Dataset subclass depending on the desired problem'''
         if self.mode == 0:
             data = self.data['test_known'].items()
             return SingleImageDataset(self, data, self.trproc)
@@ -231,6 +372,11 @@ class TigerData(object):
                 for j in range(i + 1, len(imgs)):
                     pos_pairs.append(imgs[i], imgs[j])
         neg_pairs = []
+
+
+###############################################################################
+# Other stuff
+###############################################################################
 
 
 class SimpleData(torch.utils.data.Dataset):
