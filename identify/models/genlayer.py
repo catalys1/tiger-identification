@@ -26,7 +26,7 @@ class GenLayerResNet(torch.nn.Module):
         
         self.init = True
 
-    #@torch.no_grad()
+    @torch.no_grad()
     def sample_filters(self, std=1, device='cuda'):
         # sample a set of filters, resize to desired filter size
         filts = self.gen_net.sample(y=torch.arange(64).to(device), std=std)
@@ -41,7 +41,8 @@ class GenLayerResNet(torch.nn.Module):
     def forward(self, x):
         if self.init:
             # start out with a mean sample, to reduce chance of ending up
-            # with a bad filter
+            # with a bad filter (sometimes the samples come from an untrained
+            # part of the latent space, and end up with inf values)
             self.sample_filters(std=0, device=x.device)
             self.init = False
         else:
@@ -49,6 +50,11 @@ class GenLayerResNet(torch.nn.Module):
         return self.resnet.forward(x)
 
 
+
+# This is a variant that is supposed to allow the classification gradient to
+# flow back into the generative layer network. It does that, but there are
+# problems when trying to backprop through some of the layers in the generative
+# network, so it doesn't really work.
 class GenLayerResNet2(torch.nn.Module):
     def __init__(self, glow_args, glow_weights, ksize=9, nclass=250, freeze_gen=True):
         super(GenLayerResNet2, self).__init__()
