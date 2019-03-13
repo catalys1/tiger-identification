@@ -5,42 +5,11 @@ import time
 from pathlib import Path
 import json
 import dataset
-import model
 import trainer as trn
 from types import SimpleNamespace
 
 
 DATA = Path('../data/')
-
-
-def get_loaders(data, batch_size=16, num_workers=8, collate=None):
-    args = dict(
-        batch_size=batch_size,
-        num_workers=num_workers,
-        pin_memory=True,
-    )
-    if collate is not None:
-        args['collate_fn'] = collate
-
-    trl = torch.utils.data.DataLoader(data.train(), shuffle=True, **args)
-    tel = torch.utils.data.DataLoader(data.test(), **args)
-
-    return trl, tel
-
-
-def setup_ssd_simple(args):
-    loaders = get_data(args.batch_size, num_workers=8)
-    templates = torch.load('templates').cuda()
-    size = templates.shape[-1]
-    net = dnnutil.load_model(model.SimpleSSD, args.model, token_size=size)
-    net.set_ssd_kernels(templates)
-
-    optim = torch.optim.Adam(net.parameters(), lr=args.lr)
-    loss_fn = trn.ContrastLoss(m=0.5)
-    trainer = trn.SiameseContrastTrainer(net, optim, loss_fn)
-
-    state = SimpleNamespace(net=net, loaders=loaders, optim=optim, trainer=trainer)
-    return state
 
 
 def setup(cfg, args):
@@ -50,12 +19,15 @@ def setup(cfg, args):
         collate = None
     data = cfg.data.data(**cfg.data.args)
     workers = cfg.hp.get('num_workers', 8)
-    loaders = get_loaders(data, args.batch_size, num_workers=workers,
-                          collate=collate)
+    loaders = dnnutil.get_dataloaders(data, args.batch_size,
+                                      num_workers=workers,
+                                      collate=collate)
 
     net = dnnutil.load_model(cfg.model.model, args.model, **cfg.model.args)
 
-    optim = torch.optim.Adam(net.parameters(), lr=args.lr)
+    optim = torch.optim.Adam(net.parameters(), lr=args.lr, weight_decay=1e-5)
+    if 'optim' in args:
+        optim.load_state_dict(args.optim)
     loss_fn = cfg.loss.loss(**cfg.loss.args)
     trainer = cfg.trainer(net, optim, loss_fn)
 
@@ -64,7 +36,7 @@ def setup(cfg, args):
 
 
 def main(commands=None, callback=None):
-    parser = dnnutil.config_parser(run_dir='../data/training/')
+    parser = dnnutil.config_parser(run_dir='runs')
     args = parser.parse_args(args=commands)
 
     manager = dnnutil.ConfigManager(root=args.run_dir, run_num=args.rid)
@@ -72,6 +44,10 @@ def main(commands=None, callback=None):
     state = setup(cfg, args)
 
     print(f'Run {str(manager.run_dir)}')
+    if 'config' in args:
+        desc, deets = dnnutil.config_string(args.config)
+        print(desc)
+        print(deets)
 
     for e in range(args.start, args.start + args.epochs):
         t = time.time()
@@ -81,7 +57,8 @@ def main(commands=None, callback=None):
         t = time.time() - t
         stats = state.trainer.get_stats()
         lr = state.optim.param_groups[-1]['lr']
-        manager.epoch_save(state.net, e, t, lr, *stats)
+        opt_state = state.optim.state_dict()
+        manager.epoch_save(state.net, e, t, lr, *stats, optim=opt_state)
 
         if callback is not None:
             data = dict(
