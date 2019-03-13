@@ -1,5 +1,6 @@
 import torch
 import torchvision
+# make sure you have a symlink or something to the pytorch-glow repo in ./glow
 from .glow.invertible_layers import Glow_
 
 
