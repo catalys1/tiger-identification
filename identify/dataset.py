@@ -104,7 +104,7 @@ def train_preprocess(size=320, augment=False):
     T = torchvision.transforms
     if augment:
         ops = [
-            T.RandomResizedCrop((size, size), (0.9, 1.0), (5 / 6, 6 / 5)),
+            T.RandomResizedCrop(size, (0.9, 1.0), (5 / 6, 6 / 5)),
             T.ColorJitter(0.05, 0.05, 0.05),
         ]
     else:
@@ -152,7 +152,7 @@ class _Dataset(torch.utils.data.Dataset):
             self.files.extend(imgs)
             self.labels.extend([id for _ in range(len(imgs))])
 
-        self.n = len(self.files) * self.master.train_size
+        self.n = int(len(self.files) * self.master.train_size)
 
     def __len__(self):
         return self.n
