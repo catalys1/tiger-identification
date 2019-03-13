@@ -12,7 +12,6 @@ import matplotlib.pyplot as plt
 import sys
 sys.path.append('../identify')
 import dataset
-import model
 
 
 def get_splits(dir='../data/'):
@@ -49,9 +48,17 @@ def imread(file, color='L', size=None):
     return img
 
 
-def get_data_subset():
+def get_data_subset(n_per_id=2):
     '''Extract a subset of the training set images to use for sampling
     patches.
+
+    Args:
+        n_per_id (int): max number of images to use per tiger id. If an
+            id has less than n_per_id images, than all the images will
+            be used.
+
+    Returns:
+        A list of file names corresponding to tiger images.
     '''
     data = dataset.TigerData(mode='classification').train()
     files = data.files
@@ -62,7 +69,7 @@ def get_data_subset():
     count = Counter()
     tup = [0, 1]
     for i in range(len(files)):
-        if count.get(identities[i], 0) < 2:
+        if count.get(identities[i], 0) < n_per_id:
             tup[0] = identities[i]
             count.update(tup)
             subset.append(files[i])
@@ -196,7 +203,6 @@ def find_patch_distributions(args):
         nrm = nrm / mx
         patches = nrm
 
-    breakpoint()
     print('Clustering...')
     dim_reduce = 50  # Number of principle components to keep
     normalize = args.norm  # Whether to normalize patches prior to clustering
