@@ -188,7 +188,10 @@ def find_patch_distributions(args):
     patches = []
     for f in tqdm.tqdm(subset, desc='Sampling patches'):
         img = imread(f'../data/{f}', 'L', size=320)
-        contours = get_contours(img)
+        if args.off_contours:
+            contours = img
+        else:
+            contours = get_contours(img)
         batch = sample_patches(img, contours, args.n, ps)
         patches.append(batch)
     patches = np.concatenate(patches, 0)
@@ -196,7 +199,7 @@ def find_patch_distributions(args):
 
     # Normalize patches (scale min/max to 0/1)
     # Is this really the best way to normalize? I'm not sure...
-    if args.norm:
+    if not args.no_norm:
         nrm = patches - patches.min(axis=1, keepdims=True)
         mx = nrm.max(axis=1, keepdims=True)
         mx[mx == 0] = 1  # watch out for uniform patches
@@ -205,7 +208,6 @@ def find_patch_distributions(args):
 
     print('Clustering...')
     dim_reduce = 50  # Number of principle components to keep
-    normalize = args.norm  # Whether to normalize patches prior to clustering
     patches, labels = cluster_patches(patches, k=args.k, dim_reduce=dim_reduce)
     patches = patches.reshape(patches.shape[0], ps, ps)
 
@@ -218,16 +220,19 @@ if __name__ == '__main__':
     parser.add_argument('file', metavar='Output File',
         help='Path to file where the tokens will be saved')
     parser.add_argument('--img-size', type=int, default=320,
-        help='Size to resize images to')
+        help='Size to resize images to. Default: 320')
     parser.add_argument('-k', type=int, default=400,
         help='Number of clusters (and number of tokens). Default: 400')
     parser.add_argument('-n', type=int, default=300,
         help='Number of patches to sample from each image. Default: 300')
     parser.add_argument('--patch-size', type=int, default=15,
         help='Size of token patches. Default: 15')
-    parser.add_argument('--norm', action='store_true',
-        help='Normalize patches before clustering, so that they have the same '
-             'brightness range')
+    parser.add_argument('--no-norm', action='store_true',
+        help='Do not normalize patches before clustering. '
+        'By default, patches are normalized to have the same brightness range')
+    parser.add_argument('--off-contours', action='store_true',
+        help='Sample patches from anywhere in the images, not just centered '
+        'on contours.')
     args = parser.parse_args()
 
     patches, labels = find_patch_distributions(args)
