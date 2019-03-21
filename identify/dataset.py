@@ -320,12 +320,13 @@ class TigerData(object):
         # mapping between images and which flank is visible
         self.img_flanks = self.data['img_to_side_map']
 
+        mstd = [[.5, .5, .5], [.5, .5, .5]] if color == 'RGB' else [[0.5], [0.5]]
         T = torchvision.transforms
         self.trproc = train_preprocess(size, augment)
         self.teproc = test_preprocess(size)
         self.totensor = T.Compose([
             T.ToTensor(),
-            T.Normalize([.5, .5, .5], [.5, .5, .5])
+            T.Normalize(*mstd)
         ])
 
     def get_class(self, id):
