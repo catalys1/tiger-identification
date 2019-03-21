@@ -25,7 +25,8 @@ def setup(cfg, args):
 
     net = dnnutil.load_model(cfg.model.model, args.model, **cfg.model.args)
 
-    optim = torch.optim.Adam(net.parameters(), lr=args.lr, weight_decay=1e-5)
+    #optim = torch.optim.Adam(net.parameters(), lr=args.lr, weight_decay=1e-5)
+    optim = cfg.optim.optim(net.parameters(), **cfg.optim.args)
     if 'optim' in args:
         optim.load_state_dict(args.optim)
     loss_fn = cfg.loss.loss(**cfg.loss.args)
@@ -49,8 +50,12 @@ def main(commands=None, callback=None):
         print(desc)
         print(deets)
 
+    #schedule = dnnutil.EpochSetLR(state.optim, ((60, .1), (100, .1)), args.start - 1)
+    schedule = dnnutil.EpochSetLR(state.optim, ((50, .5),(100, .2),(150,.1)), args.start - 1)
+
     for e in range(args.start, args.start + args.epochs):
         t = time.time()
+        schedule.step()
         state.trainer.train(state.loaders[0], e)
         state.trainer.eval(state.loaders[1], e)
 
