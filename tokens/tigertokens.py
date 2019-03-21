@@ -172,7 +172,7 @@ def cluster_patches(patches, k=100, dim_reduce=None):
 
     if r:
         patches = reduction.inverse_transform(patches)
-        patches = patches.clip(0, 1)
+        patches = patches.clip(0, 1, out=patches)
 
     return patches, labels
 
