@@ -2,24 +2,22 @@
 
 import os
 import torch
-
-
 import sys
 import json
 import os.path
 import time
 import math
 import random
-
-
 import platform
 import subprocess
+from pathlib import Path
+import importlib
 
 import beanstalkc as BSC
 
 import sys
-sys.path.append('../identify')
-import main
+#sys.path.append('../identify')
+#import main
 
 
 def count_gpus():
@@ -27,20 +25,30 @@ def count_gpus():
     num_gpu = len( [1 for x in result.decode('ascii').split('\n') if 'GPU' in x] )
     return num_gpu
 
+
+def validate_gpus(gpus, ngpus):
+    for gpu in gpus:
+        if not (gpu >= 0 and gpu < ngpus):
+            return (False, gpu)
+    return (True,)
+
+
 class DNNWorker:
 
-    def __init__(self, gpu_num, config_file):
+    def __init__(self, gpus, config_file):
 
         hostname = platform.node()
 
-        ngpu = count_gpus()
-        if not (gpu_num >= 0 and gpu_num < ngpu):
-            print(f'\rERROR!!! Only found {ngpu} GPUs [0..{ngpu-1}], cannot assign GPU {gpu_num}')
+        ngpus = count_gpus()
+        gpu_val = validate_gpus(gpus, ngpus)
+        if not gpu_val[0]:
+            print(f'\rERROR!!! Only found {ngpu} GPUs [0..{ngpus-1}], cannot assign GPU {gpu_val[1]}')
             sys.exit(-1)
         else:
-            os.environ['CUDA_VISIBLE_DEVICES'] = f'{gpu_num}'
-            self.gpu_info = (hostname,gpu_num,ngpu)
-            self.my_id    = f'{hostname}-gpu{gpu_num}'
+            gpustr = ",".join(str(x) for x in gpus)
+            os.environ['CUDA_VISIBLE_DEVICES'] = gpustr
+            self.gpu_info = (hostname, gpus, ngpus)
+            self.my_id    = f'{hostname}-gpu{gpustr}'
 
         CONFIG = json.load(open(config_file,'r'))
 
@@ -90,14 +98,7 @@ class DNNWorker:
                 msg.delete()
                 #print('done')
 
-
-
-
                 # PERFORM TH REQUESTED JOB
-
-
-
-
                 job_id = jbody['job_id']
                 self.current_jid = job_id
 
@@ -105,10 +106,15 @@ class DNNWorker:
                 print(f'\r    Loading job info from file:  {job_file}')
 
                 # TODO SHOULD CHECK HERE IF VALID JOB FILE
-                jfile = jbody['job_desc_file']
                 jpath = jbody['job_path']
-                joined = os.path.join(jpath,jfile)
-                rundir  = jbody['rundir']
+                main_file = Path(jbody['main_file']).stem
+                
+                # Import the main module
+                sys.path.append(jpath)
+                main = importlib.import_module(main_file, package=jpath)
+
+                joined = os.path.join(jpath, job_file)
+                rundir = jbody['rundir']
                 runid = jbody['runid']
                 if runid == 0:
                     start = f'start {joined}'
@@ -156,10 +162,10 @@ class DNNWorker:
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--gpu', type=int, required=True)
+    parser.add_argument('--gpus', type=int, required=True, nargs='+')
     parser.add_argument('--config', type=str, default='queue_config.json')
     args = parser.parse_args()
 
-    worker = DNNWorker(gpu_num=args.gpu, config_file=args.config)
+    worker = DNNWorker(gpus=args.gpus, config_file=args.config)
     worker.start()
 
